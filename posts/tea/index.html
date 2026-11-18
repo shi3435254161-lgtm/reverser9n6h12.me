@@ -1,0 +1,320 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="一个 CTF 选手的公开笔记本：逆向工程、密码学与学习方法论。"><meta name="theme-color" content="#F4EFE8"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>TEA · 逆向手记</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Quicksand:wght@400;500;600;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet"><link rel="stylesheet" href="/_astro/about.DsxduPc1.css"></head> <body>  <header class="nav"> <div class="container nav__inner"> <a class="brand" href="/"> <span class="brand__zh">逆向手记</span> <span class="brand__en">RE::NOTES</span> </a> <nav class="nav__links" aria-label="主导航"> <a class="nav__link" href="/"> 首页 </a><a class="nav__link" href="/archive/"> 归档 </a><a class="nav__link" href="/tags/"> 标签 </a><a class="nav__link" href="/about/"> 关于 </a> </nav> <div class="nav__acts"> <span class="icon-btn" title="搜索（待接入）" aria-hidden="true"> <svg width="18" height="18" viewBox="0 0 20 20" fill="none"> <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"></circle> <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path> </svg> </span> <a class="icon-btn" href="https://github.com/" target="_blank" rel="noopener" aria-label="GitHub"> <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"> <path d="M10 2C5.58 2 2 5.58 2 10c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0018 10c0-4.42-3.58-8-8-8z"></path> </svg> </a> </div> </div> </header> <header class="container article-head"> <a class="back" href="/">← 回到小屋</a> <div class="article-head__tags"> <a class="chip chip--pink" href="/tags/Crypto/"> Crypto </a> </div> <h1>TEA</h1> <div class="article-head__meta"> 2026-03-24 · 约 7 分钟 · 3.0k 字 </div> </header> <div class="container"> <div class="cover" role="img" aria-label="文章封面插画" style="background-image:url('/img/background/download1.jpg')"></div> </div> <div class="container article-layout"> <article> <div class="prose"> <h1 id="tea-系列加密">TEA 系列加密</h1>
+<p>TEA（Tiny Encryption Algorithm）是一种实现简单、速度较快的分组加密算法。它每次处理 64 bit（8 byte）数据，使用 128 bit（16 byte）密钥，常见迭代轮数为 32 轮。</p>
+<p>在 CTF Reverse 中，TEA 系列常见于算法识别题。识别重点通常包括：</p>
+<ul>
+<li>以两个 <code>uint32_t</code> 作为一组数据块。</li>
+<li>使用四个 <code>uint32_t</code> 作为 key。</li>
+<li>循环中反复出现 <code>sum += delta</code> 或 <code>sum -= delta</code>。</li>
+<li>常量 <code>0x9e3779b9</code> 或其补码形式 <code>0x61c88647</code>。</li>
+</ul>
+<p>TEA 后续还有 XTEA、XXTEA 等变种，核心思路相近，但轮函数和数据组织方式会有差异。</p>
+<h2 id="tea-实现">TEA 实现</h2>
+<pre><code class="language-c">#include&#x3C;stdio.h>
+
+#include&#x3C;stdint.h>
+
+  
+
+void encrypt(uint32_t* v,uint32_t* k)
+
+{
+
+    uint32_t sum=0;
+
+    uint32_t v0=v[0],v1=v[1];
+
+    uint32_t delta=0x9e3779b9;
+
+    uint32_t k0=k[0],k1=k[1],k2=k[2],k3=k[3];
+
+  
+
+    for(int i=0;i&#x3C;32;i++)
+
+    {
+
+        sum+=delta;
+
+        v0+=((v1&#x3C;&#x3C;4)+k0)^(v1+sum)^((v1>>5)+k1);
+
+        v1+=((v0&#x3C;&#x3C;4)+k2)^(v0+sum)^((v0>>5)+k3);
+
+    }
+
+    v[0]=v0;
+
+    v[1]=v1;
+
+}
+
+  
+
+void decrypt(uint32_t* v,uint32_t* k)
+
+{
+
+    uint32_t v0=v[0],v1=v[1];
+
+    uint32_t delta=0x9e3779b9;
+
+    uint32_t sum=delta*32;
+
+    uint32_t k0=k[0],k1=k[1],k2=k[2],k3=k[3];
+
+    for(int i=0;i&#x3C;32;i++)
+
+    {
+
+        v1-=((v0&#x3C;&#x3C;4)+k2)^(v0+sum)^((v0>>5)+k3);
+
+        v0-=((v1&#x3C;&#x3C;4)+k0)^(v1+sum)^((v1>>5)+k1);
+
+    }
+
+  
+
+    v[0]=v0;
+
+    v[1]=v1;
+
+}
+
+  
+
+int main()
+
+{
+
+  
+
+    // 两个32位无符号整数,即待加密的64bit明文数据
+
+    char plain[]="12345678";
+
+    uint32_t v[2]={0x12345678,0x78563412};
+
+    // 四个32位无符号整数,即128bit的key
+
+    uint32_t k[4]={0x1,0x2,0x3,0x4};
+
+    printf("Data is : %x %x\n",v[0],v[1]);
+
+    encrypt(v,k);
+
+    printf("Encrypted data is : %x %x\n",v[0],v[1]);
+
+    decrypt(v,k);
+
+    printf("decrypted data is : %x %x\n",v[0],v[1]);
+
+  
+
+    return 0;
+
+  
+
+}
+</code></pre>
+<p>由于TEA用python是实现比较麻烦(需要截断位数),因此在逆向的时候我们经常将ida里的逻辑复制粘贴到C编译器中稍加修改就可以了</p>
+<h2 id="识别特征">识别特征:</h2>
+<p>-标准DELTA常数(魔数)
+-密钥为16字节(4个DWORD)加密轮数为16/32/64轮加密结构中存在左4右5移位及异或运算加密结构中存在轮加/减相同常数的语句</p>
+<h2 id="对抗方式">对抗方式:</h2>
+<p>-修改魔数
+-修改轮数
+-修改轮加/减魔数的位置
+就做题经验来看,tea解密时数据大多是unsigned int 类型的</p>
+<h1 id="xtea">XTEA:</h1>
+<p>XTEA
+XTEA是TEA的升级版，变量类型处理和TEA一样，主要是加密逻辑有所变化，对每轮加密的key的选择也有所变化。
+C语言实现加解密:</p>
+<pre><code class="language-c">#include&#x3C;stdio.h>
+
+#include&#x3C;stdint.h>
+
+void encrypt(uint32_t* v,uint32_t* key)
+
+{
+
+    uint32_t v0=v[0],v1=v[1];
+
+    uint32_t sum=0,delta=0x9E3779B9;
+
+    for(int i=0;i&#x3C;32;i++)
+
+    {
+
+        v0+=(((v1&#x3C;&#x3C;4)^(v1>>5))+v1)^(sum+key[sum&#x26;3]);
+
+        sum+=delta;
+
+        v1+=(((v0&#x3C;&#x3C;4)^(v0>>5))+v0)^(sum+key[(sum>>11)&#x26;3]);
+
+    }
+
+    v[0]=v0;
+
+    v[1]=v1;
+
+}
+
+  
+
+void decrypt(uint32_t* v,uint32_t* key)
+
+{
+
+    uint32_t v0=v[0],v1=v[1];
+
+    uint32_t delta=0X9E3779B9;
+
+    uint32_t sum=delta *32;
+
+    for(int i=0;i&#x3C;32;i++)
+
+    {
+
+        v1-=(((v0&#x3C;&#x3C;4)^(v0>>5))+v0)^(sum+key[(sum>>11)&#x26;3]);
+
+        sum-=delta;
+
+        v0-=(((v1&#x3C;&#x3C;4)^(v1>>5))+v1)^(sum+key[sum&#x26;3]);
+
+    }
+
+}
+</code></pre>
+<h2 id="识别特征-1">识别特征:</h2>
+<p>同TEA
+加密结构中存在右移11位并&#x26;3的运算</p>
+<h2 id="对抗方式-1">对抗方式:</h2>
+<p>同TEA</p>
+<h1 id="xxtea">XXTEA:</h1>
+<p>XXTEA是XTEA的升级版，其实现过程比前两种算法要略显复杂些，加密的明文数据可以不再是64bit(两个32位无符号整数)，并且其加密轮数是由n，即待加密数据个数决定的.
+c语言实现加密解密:</p>
+<pre><code class="language-c">#include&#x3C;stdio.h>
+
+#include&#x3C;stdint.h>
+
+#define DELTA 0x9e3379B9//最常见的魔改就是delta的值
+
+#define MX (((z>>5^y&#x3C;&#x3C;2)+(y>>3^z&#x3C;&#x3C;4))^((sum^y)+(key[(p&#x26;3)^e]^z)))
+
+void xxtea(uint32_t* v,int n,uint32_t* key)
+
+{
+
+    uint32_t y,z,sum;
+
+    unsigned p,rounds,e;
+
+    if(n>1)
+
+    {
+
+        rounds=6+52/n;//这里的轮数可以魔改,同时这个轮数也是一个xxtea的特征
+
+        sum=0;
+
+        z=v[n-1];
+
+        do
+
+        {
+
+            sum+=DELTA;
+
+            e=(sum>>2)&#x26;3;//这里也是一个特征
+
+            for(p=0;p&#x3C;n-1;p++)
+
+            {
+
+                y=v[p+1];
+
+                z=v[p]+=MX;
+
+            }
+
+            y=v[0];
+
+            z=v[n-1]+=MX;
+
+        }
+
+        while(--rounds);
+
+    }
+
+    else if(n&#x3C;-1)
+
+    {
+
+        n=-n;
+
+        rounds=6+52/n;
+
+        sum=rounds*DELTA;
+
+        y=v[0];
+
+        do
+
+        {
+
+            e=(sum>>2)&#x26;3;
+
+            for(p=n-1;p>0;p--)
+
+            {
+
+                z=v[p-1];
+
+                y=v[p]-=MX;
+
+            }
+
+            z=v[n-1];
+
+            y=v[0]-=MX;
+
+            sum-=DELTA;
+
+        }
+
+        while(--rounds);
+
+    }
+
+  
+
+}
+
+  
+
+int main()
+
+{
+
+    uint32_t v[2]={0x12345678,0x78563412};//这里可以改加密数据的长度
+
+    uint32_t k[4]={0x1,0x2,0x3,0x4};
+
+    int n=2;这里的n和加密数据的长度统一
+
+  
+
+    printf("Data is : %x %x\n",v[0],v[1]);
+
+    xxtea(v,n,k);
+
+    printf("Encrypted data is : %x %x\n",v[0],v[1]);
+
+    xxtea(v,-n,k);
+
+    printf("Decrypted data is : %x %x\n",v[0],v[1]);
+
+  
+
+    return 0;
+</code></pre> </div> <div class="prev-next"> <a class="pn-card" href="/posts/rc4/"> <small>← 上一篇</small> <strong>RC4</strong> </a> <a class="pn-card" href="/posts/block-cipher/"> <small>下一篇 →</small> <strong>Block Cipher</strong> </a> </div> </article> <aside class="sidebar"> <section class="widget toc"> <div class="toc__title">目录 CONTENTS</div> <a href="#tea-实现" data-depth="2" class="is-current"> TEA 实现 </a><a href="#识别特征" data-depth="2"> 识别特征: </a><a href="#对抗方式" data-depth="2"> 对抗方式: </a><a href="#识别特征-1" data-depth="2"> 识别特征: </a><a href="#对抗方式-1" data-depth="2"> 对抗方式: </a> </section> <section class="widget"> <div class="toc__title">文章信息 META</div> <div class="meta-row"><b>字数</b>3.0k 字</div> <div class="meta-row"><b>阅读</b>约 7 分钟</div> <div class="meta-row"><b>许可</b>CC BY-SA 4.0</div> </section> </aside> </div> <footer class="footer"> <div class="container footer__row"> <span>(C) 2026 逆向手记 · built with Astro</span> <span>CC BY-SA 4.0 · 保持署名，同样分享</span> </div> </footer>  </body></html>

@@ -1,0 +1,89 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="一个 CTF 选手的公开笔记本：逆向工程、密码学与学习方法论。"><meta name="theme-color" content="#F4EFE8"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>SMC自修改代码 · 逆向手记</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Quicksand:wght@400;500;600;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet"><link rel="stylesheet" href="/_astro/about.DsxduPc1.css"></head> <body>  <header class="nav"> <div class="container nav__inner"> <a class="brand" href="/"> <span class="brand__zh">逆向手记</span> <span class="brand__en">RE::NOTES</span> </a> <nav class="nav__links" aria-label="主导航"> <a class="nav__link" href="/"> 首页 </a><a class="nav__link" href="/archive/"> 归档 </a><a class="nav__link" href="/tags/"> 标签 </a><a class="nav__link" href="/about/"> 关于 </a> </nav> <div class="nav__acts"> <span class="icon-btn" title="搜索（待接入）" aria-hidden="true"> <svg width="18" height="18" viewBox="0 0 20 20" fill="none"> <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"></circle> <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path> </svg> </span> <a class="icon-btn" href="https://github.com/" target="_blank" rel="noopener" aria-label="GitHub"> <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"> <path d="M10 2C5.58 2 2 5.58 2 10c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0018 10c0-4.42-3.58-8-8-8z"></path> </svg> </a> </div> </div> </header> <header class="container article-head"> <a class="back" href="/">← 回到小屋</a> <div class="article-head__tags"> <a class="chip chip--amber" href="/tags/Confusion/"> Confusion </a> </div> <h1>SMC自修改代码</h1> <div class="article-head__meta"> 2026-03-15 · 约 4 分钟 · 1.6k 字 </div> </header> <div class="container"> <div class="cover" role="img" aria-label="文章封面插画" style="background-image:url('/img/background/%F0%9D%93%A4%F0%9D%93%B5%F0%9D%93%BA%F0%9D%93%BE%F0%9D%93%B2%F0%9D%93%B8%F0%9D%93%BB%F0%9D%93%BB%F0%9D%93%AA%F0%9D%93%A2%F0%9D%93%B1%F0%9D%93%B2%F0%9D%93%AF%F0%9D%93%AE%F0%9D%93%BB.jpg')"></div> </div> <div class="container article-layout"> <article> <div class="prose"> <p>自修改代码（Self-Modifying Code，SMC）指程序在运行过程中修改即将执行的代码。常见做法是把关键逻辑以加密形式保存在可执行文件或资源区中，运行时再动态解密、执行，执行后也可能再次加密，借此增加静态分析难度。</p>
+<p>从逆向视角看，SMC 的核心特征通常包括：</p>
+<ul>
+<li>程序会修改代码段权限，例如调用 <code>VirtualProtect</code>。</li>
+<li>某段代码在静态视图中像乱码或无意义指令。</li>
+<li>调试运行到特定位置后，原本异常的代码会被还原成可执行逻辑。</li>
+<li>有些样本会在执行后重新加密，防止直接 dump。</li>
+</ul>
+<p>一段展示 SMC 思路的伪代码：</p>
+<pre><code class="language-c">if(运行条件满足){
+	DecryptProc(Address of check)//对check代码解密
+	//......
+	check();//调用check
+	//......
+	EncryptProc(Address of check)//再对代码进行加密,防止程序被dump
+	}
+</code></pre>
+<p>以下打造一个使用SMC进行静态分析对抗的示例,首先正常写一个程序:</p>
+<pre><code class="language-c">#include&#x3C;stdio.h>
+int check(int in) {
+	return in == 12345;
+}
+int main()
+{
+	int input;
+	scanf("%d", &#x26;input);
+	if (check(input))   
+		printf("good!");
+	return 0;
+}
+</code></pre>
+<p>然后我们想把check这个函数保护起来,先把其机器码摘出来进行加密:</p>
+<pre><code class="language-c">#include&#x3C;stdio.h>
+#include&#x3C;windows.h>
+int check(int in) {
+	return in == 12345;
+}
+void decryption()
+{
+	DWORD old;
+	VirtualProtect(check, 4096, PAGE_EXECUTE_READWRITE, &#x26;old);//VirtualProtect这个存在于Windows库里的函数作用为对函数进行权限修改
+	int de = 0x11;
+	for (int j = 0; j &#x3C; 36; j++)
+	{
+		*((char*)check + j) ^= de;
+		de++;
+	}
+	VirtualProtect(check, 4096, old, NULL);
+}
+int main()
+{
+	int input;
+	scanf("%d", &#x26;input);
+	
+	
+
+	decryption();
+
+	
+
+	if (check(input))
+		printf("good!");
+	return 0;
+}
+ //unsigned char ida_chars[] =
+ //{
+ //   0x55, 0x8b, 0xec, 0x51, 0x81, 0x7d, 0x08, 0x39, 0x30, 0x00, 
+ //0x00, 0x75, 0x09, 0xc7, 0x45, 0xfc, 0x01, 0x00, 0x00, 0x00,
+ //0xeb, 0x07, 0xc7, 0x45, 0xfc, 0x00, 0x00, 0x00, 0x00, 0x8b,
+ //0x45, 0xfc, 0x8b, 0xe5, 0x5d, 0xc3
+ //};
+ // int main()
+ // {
+ // 	int a = 0x11;
+ // 	for (int i = 0; i &#x3C; sizeof(ida_chars); i++)
+ // 	{
+
+ // 		ida_chars[i] ^= a;
+ // 		a++;
+ // 		printf("%02x",ida_chars[i]);
+ // 	}
+ // 	return 0;
+ // }
+</code></pre>
+<p>另一种常见的实现方法是通过新增一个具备RWX属性的程序段，将需要保护的代码书写在其中，这样就可以避免调用 virtualAl1oc/virtualProtect/mprotect 这类API来暴露SMC 的意图。</p>
+<h2 id="对抗思路">对抗思路:</h2>
+<p>能动态调试最好直接动态调试，因为在程序运行的某一时刻，它一定是解密完成的，这时也就暴露了，使用动态分析运行到这一时刻即可过掉保护。
+其次是根据静态分析获得解密算法，写出解密脚本提前解密这段代码。
+解密得到的机器码可以通过IDAPython的patch_byte接口很方便地写回。</p> </div> <div class="prev-next"> <div class="pn-card pn-card--empty"> <small>← 上一篇</small> <strong>已经是最早的一篇了</strong> </div> <a class="pn-card" href="/posts/入门资源/"> <small>下一篇 →</small> <strong>RE-switch from impossible to possible</strong> </a> </div> </article> <aside class="sidebar"> <section class="widget toc"> <div class="toc__title">目录 CONTENTS</div> <a href="#对抗思路" data-depth="2" class="is-current"> 对抗思路: </a> </section> <section class="widget"> <div class="toc__title">文章信息 META</div> <div class="meta-row"><b>字数</b>1.6k 字</div> <div class="meta-row"><b>阅读</b>约 4 分钟</div> <div class="meta-row"><b>许可</b>CC BY-SA 4.0</div> </section> </aside> </div> <footer class="footer"> <div class="container footer__row"> <span>(C) 2026 逆向手记 · built with Astro</span> <span>CC BY-SA 4.0 · 保持署名，同样分享</span> </div> </footer>  </body></html>

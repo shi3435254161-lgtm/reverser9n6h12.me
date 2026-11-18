@@ -1,0 +1,839 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="一个 CTF 选手的公开笔记本：逆向工程、密码学与学习方法论。"><meta name="theme-color" content="#F4EFE8"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>VM · 逆向手记</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Quicksand:wght@400;500;600;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet"><link rel="stylesheet" href="/_astro/about.DsxduPc1.css"></head> <body>  <header class="nav"> <div class="container nav__inner"> <a class="brand" href="/"> <span class="brand__zh">逆向手记</span> <span class="brand__en">RE::NOTES</span> </a> <nav class="nav__links" aria-label="主导航"> <a class="nav__link" href="/"> 首页 </a><a class="nav__link" href="/archive/"> 归档 </a><a class="nav__link" href="/tags/"> 标签 </a><a class="nav__link" href="/about/"> 关于 </a> </nav> <div class="nav__acts"> <span class="icon-btn" title="搜索（待接入）" aria-hidden="true"> <svg width="18" height="18" viewBox="0 0 20 20" fill="none"> <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"></circle> <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path> </svg> </span> <a class="icon-btn" href="https://github.com/" target="_blank" rel="noopener" aria-label="GitHub"> <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"> <path d="M10 2C5.58 2 2 5.58 2 10c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0018 10c0-4.42-3.58-8-8-8z"></path> </svg> </a> </div> </div> </header> <header class="container article-head"> <a class="back" href="/">← 回到小屋</a> <div class="article-head__tags"> <a class="chip chip--amber" href="/tags/Confusion/"> Confusion </a> </div> <h1>VM</h1> <div class="article-head__meta"> 2026-05-11 · 约 29 分钟 · 11.6k 字 </div> </header> <div class="container"> <div class="cover" role="img" aria-label="文章封面插画" style="background-image:url('/img/background/sdfnh1.jpg')"></div> </div> <div class="container article-layout"> <article> <div class="prose"> <h1 id="指令虚拟化">指令虚拟化</h1>
+<h2 id="这篇文章解决什么问题">这篇文章解决什么问题</h2>
+<p>VM（Virtual Machine，虚拟机）类题目是逆向中常见的代码保护方式。出题人会把原本的逻辑转换成一套自定义字节码，再由解释器循环读取并执行。静态分析时，我们看到的往往不是直接的业务逻辑，而是“取 opcode → 分发 → 执行 handler”的解释器结构。</p>
+<p>这篇文章先从一个最小 VM 示例入手，再说明如何定义指令集、实现解释器，以及逆向时应该如何还原 VM 的真实逻辑。</p>
+<h2 id="认识虚拟机">认识虚拟机</h2>
+<p>虚拟机本质上是用软件模拟一套执行环境。我们可以自定义一套指令，例如 <code>0x01</code> 表示把立即数放入虚拟寄存器，<code>0x02</code> 表示输出寄存器中的字符。程序运行时，解释器根据当前 <code>eip</code> 读取 opcode，再跳转到对应的 handler 执行。</p>
+<p>在代码保护中，虚拟化会把原本直接执行的机器码转换成自定义字节码。这样一来，逆向者不能只看普通反编译结果，而需要先理解这套 VM 的指令集和解释器。</p>
+<p><img src="https://zxc1810556537.oss-cn-beijing.aliyuncs.com/F:%5CTypora20260507211950.png" alt="VM 执行流程"></p>
+<p>VM 的主程序通常是一个循环：不断读取 opcode，执行 opcode 对应的 handler，最后更新虚拟 <code>eip</code>。</p>
+<h2 id="最小示例">最小示例</h2>
+<p>原始程序：</p>
+<pre><code class="language-c">#include &#x3C;stdio.h>
+
+int main() {
+    printf("Hello!
+");
+    return 0;
+}
+</code></pre>
+<p>可以用如下虚拟机思路重写：</p>
+<pre><code class="language-c">#include &#x3C;stdio.h>
+
+int main() {
+    int eip = 0;
+    int eax = 0;
+
+    char code[] = {
+        0x01, 0x48, 0x02,
+        0x01, 0x65, 0x02,
+        0x01, 0x6c, 0x02,
+        0x01, 0x6f, 0x02,
+        0x01, 0x21, 0x02,
+        0x01, 0x0a, 0x02,
+        0xff
+    };
+
+    while (1) {
+        switch (code[eip]) {
+        case 0x01:
+            eax = code[eip + 1];
+            eip += 2;
+            break;
+        case 0x02:
+            printf("%c", eax);
+            eip += 1;
+            break;
+        case 0xff:
+            return 0;
+        default:
+            return -1;
+        }
+    }
+}
+</code></pre>
+<p>这个例子里：</p>
+<ul>
+<li><code>0x01 imm</code>：把立即数 <code>imm</code> 放入虚拟寄存器 <code>eax</code></li>
+<li><code>0x02</code>：输出 <code>eax</code> 中保存的字符</li>
+<li><code>0xff</code>：结束 VM 执行</li>
+</ul>
+<p>所以逆向 VM 的第一步，不是急着找 flag，而是先把每个 opcode 的含义整理出来。</p>
+<h2 id="正向实现">正向实现：</h2>
+<p>想要对抗指令虚拟化，首先要搞清楚用于保护的虚拟机是如何实现的
+要想实现虚拟机，需要完成两个目标：
+1.定义一套指令集
+2.实现对应的解释器</p>
+<h2 id="结构体的定义">结构体的定义：</h2>
+<p>真实赛题的VM通常会实现一个类似如下的结构体，用于保存虚拟机状态：</p>
+<pre><code class="language-c">typedef struct
+{
+unsigned int r1; //虚拟寄存器r1
+unsigned int r2; //虚拟寄存器r2
+unsigned int eip; //指向正在解释的opcode地址
+unsigned char mem[256]; //虚拟内存
+unsigned char code[1024]; //存放自定义机器码
+}
+</code></pre>
+<h2 id="书写机器码">书写机器码：</h2>
+<p>假定希望实现的语句如下：</p>
+<pre><code class="language-c">#define _CRT_SECURE_NO_WARNINGS
+#include&#x3C;stdio.h>
+#include&#x3C;string.h>
+
+typedef struct
+{
+	unsigned int r1; //虚拟寄存器r1
+	unsigned int r2; //虚拟寄存器r2
+	unsigned int eip; //指向正在解释的opcode地址
+	unsigned char mem[256]; //虚拟内存
+	unsigned char code[1024]; //存放自定义机器码
+};
+int main() {
+	char input[60];
+	char target[] = "Y0u'd_BetteR_N0t_be_S0me0Ne_Who_always_sh0ws_0ff";
+	scanf("%59s", input);
+	for (int i = 0; i &#x3C; strlen(target); i++)
+	{
+		input[i] ^= 0x21;
+	}
+
+	if (!memcmp(input, target, 60))
+		printf("yes\n");
+	else
+		printf("No\n");
+
+}
+</code></pre>
+<p>我们定义：</p>
+<table>
+<thead>
+<tr>
+<th>opcode</th>
+<th>指令格式</th>
+<th>指令长度</th>
+<th>指令含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x10</td>
+<td>0x10 操作数</td>
+<td>2</td>
+<td>r1=操作数</td>
+</tr>
+<tr>
+<td>0x11</td>
+<td>0x11 操作数</td>
+<td>2</td>
+<td>r2=操作数</td>
+</tr>
+<tr>
+<td>0x20</td>
+<td>0x20 操作数1 操作数2</td>
+<td>3</td>
+<td>mem[操作数1]=操作数2</td>
+</tr>
+<tr>
+<td>0x30</td>
+<td>0x30</td>
+<td>1</td>
+<td>mem[r1]^=r2</td>
+</tr>
+<tr>
+<td>0x40</td>
+<td>0x40</td>
+<td>1</td>
+<td>接收输入到&#x26;mem[0]</td>
+</tr>
+<tr>
+<td>0x50</td>
+<td>0x50 操作数1 操作数2</td>
+<td>3</td>
+<td>返回memcmp(&#x26;mem[0],&#x26;mem[操作数1],操作数2)</td>
+</tr>
+</tbody>
+</table>
+<p>根据我们定义的指令对其进行拆分和重构，可以得到如下代码：</p>
+<pre><code class="language-c">#include&#x3C;stdio.h>
+int main() {
+	unsigned char code[] = {
+0x20,0x10,0x59,
+0x20,0x10,0x30,
+0x20,0x10,0x75,
+0x20,0x10,0x27,
+0x20,0x10,0x64,
+0x20,0x10,0x5f,
+0x20,0x10,0x42,
+0x20,0x10,0x65,
+0x20,0x10,0x74,
+0x20,0x10,0x74,
+0x20,0x10,0x65,
+0x20,0x10,0x52,
+0x20,0x10,0x5f,
+0x20,0x10,0x4e,
+0x20,0x10,0x30,
+0x20,0x10,0x74,
+0x20,0x10,0x5f,
+0x20,0x10,0x62,
+0x20,0x10,0x65,
+0x20,0x10,0x5f,
+0x20,0x10,0x53,
+0x20,0x10,0x30,
+0x20,0x10,0x6d,
+0x20,0x10,0x65,
+0x20,0x10,0x30,
+0x20,0x10,0x4e,
+0x20,0x10,0x65,
+0x20,0x10,0x5f,
+0x20,0x10,0x57,
+0x20,0x10,0x68,
+0x20,0x10,0x6f,
+0x20,0x10,0x5f,
+0x20,0x10,0x61,
+0x20,0x10,0x6c,
+0x20,0x10,0x77,
+0x20,0x10,0x61,
+0x20,0x10,0x79,
+0x20,0x10,0x73,
+0x20,0x10,0x5f,
+0x20,0x10,0x73,
+0x20,0x10,0x68,
+0x20,0x10,0x30,
+0x20,0x10,0x77,
+0x20,0x10,0x73,
+0x20,0x10,0x5f,
+0x20,0x10,0x30,
+0x20,0x10,0x66,
+0x20,0x10,0x66,
+
+0x40,
+
+0x11,0x21,0x10,0x00,0x30,0x11,0x21,0x10,0x01,0x30,0x11,0x21,0x10,0x02,0x30,0x11,0x21,0x10,0x03,0x30,0x11,0x21,0x10,0x04,0x30,0x11,0x21,0x10,0x05,0x30,0x11,0x21,0x10,0x06,0x30,0x11,0x21,0x10,0x07,0x30,0x11,0x21,0x10,0x08,0x30,0x11,0x21,0x10,0x09,0x30,0x11,0x21,0x10,0x0a,0x30,0x11,0x21,0x10,0x0b,0x30,0x11,0x21,0x10,0x0c,0x30,0x11,0x21,0x10,0x0d,0x30,0x11,0x21,0x10,0x0e,0x30,0x11,0x21,0x10,0x0f,0x30,0x11,0x21,0x10,0x10,0x30,0x11,0x21,0x10,0x11,0x30,0x11,0x21,0x10,0x12,0x30,0x11,0x21,0x10,0x13,0x30,0x11,0x21,0x10,0x14,0x30,0x11,0x21,0x10,0x15,0x30,0x11,0x21,0x10,0x16,0x30,0x11,0x21,0x10,0x17,0x30,0x11,0x21,0x10,0x18,0x30,0x11,0x21,0x10,0x19,0x30,0x11,0x21,0x10,0x1a,0x30,0x11,0x21,0x10,0x1b,0x30,0x11,0x21,0x10,0x1c,0x30,0x11,0x21,0x10,0x1d,0x30,0x11,0x21,0x10,0x1e,0x30,0x11,0x21,0x10,0x1f,0x30,0x11,0x21,0x10,0x20,0x30,0x11,0x21,0x10,0x21,0x30,0x11,0x21,0x10,0x22,0x30,0x11,0x21,0x10,0x23,0x30,0x11,0x21,0x10,0x24,0x30,0x11,0x21,0x10,0x25,0x30,0x11,0x21,0x10,0x26,0x30,0x11,0x21,0x10,0x27,0x30,0x11,0x21,0x10,0x28,0x30,0x11,0x21,0x10,0x29,0x30,0x11,0x21,0x10,0x2a,0x30,0x11,0x21,0x10,0x2b,0x30,0x11,0x21,0x10,0x2c,0x30,0x11,0x21,0x10,0x2d,0x30,0x11,0x21,0x10,0x2e,0x30,0x11,0x21,0x10,0x2f,0x30,0x11,0x21,0x10,0x30,0x30,0x11,0x21,0x10,0x31,0x30,0x11,0x21,0x10,0x32,0x30,0x11,0x21,0x10,0x33,0x30,0x11,0x21,0x10,0x34,0x30,0x11,0x21,0x10,0x35,0x30,0x11,0x21,0x10,0x36,0x30,0x11,0x21,0x10,0x37,0x30,0x11,0x21,0x10,0x38,0x30,0x11,0x21,0x10,0x39,0x30,0x11,0x21,0x10,0x3a,0x30,0x50,0x10,59};
+
+</code></pre>
+<h2 id="初始化虚拟机">初始化虚拟机：</h2>
+<p>在实际虚拟机运行之前，需要先对VM结构体进行初始化：</p>
+<pre><code class="language-c">VM* vm_new() {
+        VM* vm = (VM*)malloc(sizeof(VM));
+        memset(vm, 0, sizeof(VM));
+        memcpy(vm->code, code, sizeof(code));
+        return vm;
+</code></pre>
+<h2 id="解释器编写">解释器编写：</h2>
+<p>现在就可以来实现每条指令的handle以及dispatcher了：</p>
+<pre><code class="language-c">int vm_run(VM* vm) {
+    char opcode;
+    char operand_1, operand_2;
+
+    while (1) {
+        opcode = vm->code[vm->eip];
+        switch (opcode) {
+        case 0x10:
+            operand_1 = vm->code[vm->eip + 1];
+            vm->r1 = operand_1;
+            vm->eip += 2;
+            break;
+        case 0x11:
+            operand_1 = vm->code[vm->eip + 1];
+            vm->r2 = operand_1;
+        case 0x20:
+            operand_1 = vm->code[vm->eip + 1];
+            operand_2 = vm->code[vm->eip + 2];
+            vm->mem[operand_1] = operand_2;
+            vm->eip += 3;
+            break;
+        case 0x30:
+            vm->mem[vm->r1] ^= vm->r2;
+            vm->eip += 1;
+            break;
+        case 0x40:
+            scanf("%59s", &#x26;vm->mem[0]);
+        case 0x50:
+            operand_1 = vm->code[vm->eip + 1];
+            operand_2 = vm->code[vm->eip + 2];
+            return memcmp(&#x26;vm->mem[0], &#x26;vm->mem[operand_1], operand_2);
+
+        }
+    }
+}
+</code></pre>
+<h2 id="启动">启动：</h2>
+<p>于是main函数可以这样写 :</p>
+<pre><code class="language-c">int main()
+{
+VM* vm=vm_new();
+if(!vm_run(vm))
+	printf("Yes\n");
+else
+	printf("No\n");
+} 
+</code></pre>
+<h2 id="解题步骤">解题步骤：</h2>
+<p>遇到VM类的赛题，我们一般按照如下的步骤来解题:</p>
+<h3 id="1分析vm结构">1.分析VM结构：</h3>
+<pre><code>结构体大小
+有哪些字段
+</code></pre>
+<h3 id="2分析指令集">2.分析指令集：</h3>
+<pre><code>指令长度是否可变
+ 每种指令的构成
+ 每种指令的含义
+ VM的退出条件
+</code></pre>
+<h3 id="3编写python版解释器输出伪汇编代码">3.编写python版解释器，输出伪汇编代码</h3>
+<h3 id="4阅读伪代码分析程序流程写出去虚拟化的原始代码">4.阅读伪代码，分析程序流程，写出去虚拟化的原始代码</h3>
+<h3 id="5书写解题脚本">5.书写解题脚本</h3>
+<p>本例的python解释器如下：</p>
+<pre><code class="language-python">code=b' \x10Y \x100 \x10u \x10\' \x10d \x10_ \x10B \x10e \x10t \x10t \x10e \x10R \x10_ \x10N \x100 \x10t \x10_ \x10b \x10e \x10_ \x10S \x100 \x10m \x10e \x100 \x10N \x10e \x10_ \x10W \x10h \x10o \x10_ \x10a \x10l \x10w \x10a \x10y \x10s \x10_ \x10s \x10h \x100 \x10w \x10s \x10_ \x100 \x10f \x10f@\x11!\x10\x000\x11!\x10\x010\x11!\x10\x020\x11!\x10\x030\x11!\x10\x040\x11!\x10\x050\x11!\x10\x060\x11!\x10\x070\x11!\x10\x080\x11!\x10\t0\x11!\x10\n0\x11!\x10\x0b0\x11!\x10\x0c0\x11!\x10\r0\x11!\x10\x0e0\x11!\x10\x0f0\x11!\x10\x100\x11!\x10\x110\x11!\x10\x120\x11!\x10\x130\x11!\x10\x140\x11!\x10\x150\x11!\x10\x160\x11!\x10\x170\x11!\x10\x180\x11!\x10\x190\x11!\x10\x1a0\x11!\x10\x1b0\x11!\x10\x1c0\x11!\x10\x1d0\x11!\x10\x1e0\x11!\x10\x1f0\x11!\x10 0\x11!\x10!0\x11!\x10"0\x11!\x10#0\x11!\x10$0\x11!\x10%0\x11!\x10&#x26;0\x11!\x10\'0\x11!\x10(0\x11!\x10)0\x11!\x10*0\x11!\x10+0\x11!\x10,0\x11!\x10-0\x11!\x10.0\x11!\x10/0\x11!\x1000\x11!\x1010\x11!\x1020\x11!\x1030\x11!\x1040\x11!\x1050\x11!\x1060\x11!\x1070\x11!\x1080\x11!\x1090\x11!\x10:0P\x10;'
+
+  
+
+r1=0
+
+r2=0
+
+eip=0
+
+mem=[0]*256
+
+  
+
+while True:
+
+    opcode=code[eip]
+
+    print(hex(eip)[2:].rjust(2,'0'),end='   ')
+
+    if opcode==0x20:
+
+        op1=code[eip+1]
+
+        op2=code[eip+2]
+
+        mem[op1]=op2
+
+        print(f"mov [{hex(op1)}],{hex(op2)}")
+
+        eip+=3
+
+    elif opcode ==0x10:
+
+        r2=code[eip+1]
+
+        print(f"mov r1,{hex(r1)}")
+
+        eip+=2
+
+  
+
+    elif opcode ==0x11:
+
+        r2=code[eip+1]
+
+        print(f"mov r2,{hex(r2)}")
+
+        eip+=2
+
+    elif opcode ==0x30:
+
+        mem[r1] ^=r2
+
+        print("xor [{hex(r1)}],{hex(r2)}")
+
+        eip+=1
+
+    elif opcode==0x40:
+
+        #flag=input()
+
+        flag="12345".ljust(59,'\0')
+
+        for i in range(59):
+
+            mem[i]=ord(flag[i])
+
+        eip+=1
+
+    elif opcode==0x50:
+
+        op1=code[eip+1]
+
+        op2=code[eip+2]
+
+        print(f"{mem[0:0+op2]} to {mem[op1:op1+op2]}")
+
+        print(mem[0:0+op2] == mem[op1:op1+op2])
+
+        exit()
+
+  
+
+    else:
+
+        raise RuntimeError(f"unknown opcode: {hex(opcode)}")
+
+# 00   mov [0x10],0x59
+
+# 03   mov [0x10],0x30
+
+# 06   mov [0x10],0x75
+
+# 09   mov [0x10],0x27
+
+# 0c   mov [0x10],0x64
+
+# 0f   mov [0x10],0x5f
+
+# 12   mov [0x10],0x42
+
+# 15   mov [0x10],0x65
+
+# 18   mov [0x10],0x74
+
+# 1b   mov [0x10],0x74
+
+# 1e   mov [0x10],0x65
+
+# 21   mov [0x10],0x52
+
+# 24   mov [0x10],0x5f
+
+# 27   mov [0x10],0x4e
+
+# 2a   mov [0x10],0x30
+
+# 2d   mov [0x10],0x74
+
+# 30   mov [0x10],0x5f
+
+# 33   mov [0x10],0x62
+
+# 36   mov [0x10],0x65
+
+# 39   mov [0x10],0x5f
+
+# 3c   mov [0x10],0x53
+
+# 3f   mov [0x10],0x30
+
+# 42   mov [0x10],0x6d
+
+# 45   mov [0x10],0x65
+
+# 48   mov [0x10],0x30
+
+# 4b   mov [0x10],0x4e
+
+# 4e   mov [0x10],0x65
+
+# 51   mov [0x10],0x5f
+
+# 54   mov [0x10],0x57
+
+# 57   mov [0x10],0x68
+
+# 5a   mov [0x10],0x6f
+
+# 5d   mov [0x10],0x5f
+
+# 60   mov [0x10],0x61
+
+# 63   mov [0x10],0x6c
+
+# 66   mov [0x10],0x77
+
+# 69   mov [0x10],0x61
+
+# 6c   mov [0x10],0x79
+
+# 6f   mov [0x10],0x73
+
+# 72   mov [0x10],0x5f
+
+# 75   mov [0x10],0x73
+
+# 78   mov [0x10],0x68
+
+# 7b   mov [0x10],0x30
+
+# 7e   mov [0x10],0x77
+
+# 81   mov [0x10],0x73
+
+# 84   mov [0x10],0x5f
+
+# 87   mov [0x10],0x30
+
+# 8a   mov [0x10],0x66
+
+# 8d   mov [0x10],0x66
+
+# 90   91   mov r2,0x21
+
+# 93   mov r1,0x0
+
+# 95   xor [{hex(r1)}],{hex(r2)}
+
+# 96   mov r2,0x21
+
+# 98   mov r1,0x0
+
+# 9a   xor [{hex(r1)}],{hex(r2)}
+
+# 9b   mov r2,0x21
+
+# 9d   mov r1,0x0
+
+# 9f   xor [{hex(r1)}],{hex(r2)}
+
+# a0   mov r2,0x21
+
+# a2   mov r1,0x0
+
+# a4   xor [{hex(r1)}],{hex(r2)}
+
+# a5   mov r2,0x21
+
+# a7   mov r1,0x0
+
+# a9   xor [{hex(r1)}],{hex(r2)}
+
+# aa   mov r2,0x21
+
+# ac   mov r1,0x0
+
+# ae   xor [{hex(r1)}],{hex(r2)}
+
+# af   mov r2,0x21
+
+# b1   mov r1,0x0
+
+# b3   xor [{hex(r1)}],{hex(r2)}
+
+# b4   mov r2,0x21
+
+# b6   mov r1,0x0
+
+# b8   xor [{hex(r1)}],{hex(r2)}
+
+# b9   mov r2,0x21
+
+# bb   mov r1,0x0
+
+# bd   xor [{hex(r1)}],{hex(r2)}
+
+# be   mov r2,0x21
+
+# c0   mov r1,0x0
+
+# c2   xor [{hex(r1)}],{hex(r2)}
+
+# c3   mov r2,0x21
+
+# c5   mov r1,0x0
+
+# c7   xor [{hex(r1)}],{hex(r2)}
+
+# c8   mov r2,0x21
+
+# ca   mov r1,0x0
+
+# cc   xor [{hex(r1)}],{hex(r2)}
+
+# cd   mov r2,0x21
+
+# cf   mov r1,0x0
+
+# d1   xor [{hex(r1)}],{hex(r2)}
+
+# d2   mov r2,0x21
+
+# d4   mov r1,0x0
+
+# d6   xor [{hex(r1)}],{hex(r2)}
+
+# d7   mov r2,0x21
+
+# d9   mov r1,0x0
+
+# db   xor [{hex(r1)}],{hex(r2)}
+
+# dc   mov r2,0x21
+
+# de   mov r1,0x0
+
+# e0   xor [{hex(r1)}],{hex(r2)}
+
+# e1   mov r2,0x21
+
+# e3   mov r1,0x0
+
+# e5   xor [{hex(r1)}],{hex(r2)}
+
+# e6   mov r2,0x21
+
+# e8   mov r1,0x0
+
+# ea   xor [{hex(r1)}],{hex(r2)}
+
+# eb   mov r2,0x21
+
+# ed   mov r1,0x0
+
+# ef   xor [{hex(r1)}],{hex(r2)}
+
+# f0   mov r2,0x21
+
+# f2   mov r1,0x0
+
+# f4   xor [{hex(r1)}],{hex(r2)}
+
+# f5   mov r2,0x21
+
+# f7   mov r1,0x0
+
+# f9   xor [{hex(r1)}],{hex(r2)}
+
+# fa   mov r2,0x21
+
+# fc   mov r1,0x0
+
+# fe   xor [{hex(r1)}],{hex(r2)}
+
+# ff   mov r2,0x21
+
+# 101   mov r1,0x0
+
+# 103   xor [{hex(r1)}],{hex(r2)}
+
+# 104   mov r2,0x21
+
+# 106   mov r1,0x0
+
+# 108   xor [{hex(r1)}],{hex(r2)}
+
+# 109   mov r2,0x21
+
+# 10b   mov r1,0x0
+
+# 10d   xor [{hex(r1)}],{hex(r2)}
+
+# 10e   mov r2,0x21
+
+# 110   mov r1,0x0
+
+# 112   xor [{hex(r1)}],{hex(r2)}
+
+# 113   mov r2,0x21
+
+# 115   mov r1,0x0
+
+# 117   xor [{hex(r1)}],{hex(r2)}
+
+# 118   mov r2,0x21
+
+# 11a   mov r1,0x0
+
+# 11c   xor [{hex(r1)}],{hex(r2)}
+
+# 11d   mov r2,0x21
+
+# 11f   mov r1,0x0
+
+# 121   xor [{hex(r1)}],{hex(r2)}
+
+# 122   mov r2,0x21
+
+# 124   mov r1,0x0
+
+# 126   xor [{hex(r1)}],{hex(r2)}
+
+# 127   mov r2,0x21
+
+# 129   mov r1,0x0
+
+# 12b   xor [{hex(r1)}],{hex(r2)}
+
+# 12c   mov r2,0x21
+
+# 12e   mov r1,0x0
+
+# 130   xor [{hex(r1)}],{hex(r2)}
+
+# 131   mov r2,0x21
+
+# 133   mov r1,0x0
+
+# 135   xor [{hex(r1)}],{hex(r2)}
+
+# 136   mov r2,0x21
+
+# 138   mov r1,0x0
+
+# 13a   xor [{hex(r1)}],{hex(r2)}
+
+# 13b   mov r2,0x21
+
+# 13d   mov r1,0x0
+
+# 13f   xor [{hex(r1)}],{hex(r2)}
+
+# 140   mov r2,0x21
+
+# 142   mov r1,0x0
+
+# 144   xor [{hex(r1)}],{hex(r2)}
+
+# 145   mov r2,0x21
+
+# 147   mov r1,0x0
+
+# 149   xor [{hex(r1)}],{hex(r2)}
+
+# 14a   mov r2,0x21
+
+# 14c   mov r1,0x0
+
+# 14e   xor [{hex(r1)}],{hex(r2)}
+
+# 14f   mov r2,0x21
+
+# 151   mov r1,0x0
+
+# 153   xor [{hex(r1)}],{hex(r2)}
+
+# 154   mov r2,0x21
+
+# 156   mov r1,0x0
+
+# 158   xor [{hex(r1)}],{hex(r2)}
+
+# 159   mov r2,0x21
+
+# 15b   mov r1,0x0
+
+# 15d   xor [{hex(r1)}],{hex(r2)}
+
+# 15e   mov r2,0x21
+
+# 160   mov r1,0x0
+
+# 162   xor [{hex(r1)}],{hex(r2)}
+
+# 163   mov r2,0x21
+
+# 165   mov r1,0x0
+
+# 167   xor [{hex(r1)}],{hex(r2)}
+
+# 168   mov r2,0x21
+
+# 16a   mov r1,0x0
+
+# 16c   xor [{hex(r1)}],{hex(r2)}
+
+# 16d   mov r2,0x21
+
+# 16f   mov r1,0x0
+
+# 171   xor [{hex(r1)}],{hex(r2)}
+
+# 172   mov r2,0x21
+
+# 174   mov r1,0x0
+
+# 176   xor [{hex(r1)}],{hex(r2)}
+
+# 177   mov r2,0x21
+
+# 179   mov r1,0x0
+
+# 17b   xor [{hex(r1)}],{hex(r2)}
+
+# 17c   mov r2,0x21
+
+# 17e   mov r1,0x0
+
+# 180   xor [{hex(r1)}],{hex(r2)}
+
+# 181   mov r2,0x21
+
+# 183   mov r1,0x0
+
+# 185   xor [{hex(r1)}],{hex(r2)}
+
+# 186   mov r2,0x21
+
+# 188   mov r1,0x0
+
+# 18a   xor [{hex(r1)}],{hex(r2)}
+
+# 18b   mov r2,0x21
+
+# 18d   mov r1,0x0
+
+# 18f   xor [{hex(r1)}],{hex(r2)}
+
+# 190   mov r2,0x21
+
+# 192   mov r1,0x0
+
+# 194   xor [{hex(r1)}],{hex(r2)}
+
+# 195   mov r2,0x21
+
+# 197   mov r1,0x0
+
+# 199   xor [{hex(r1)}],{hex(r2)}
+
+# 19a   mov r2,0x21
+
+# 19c   mov r1,0x0
+
+# 19e   xor [{hex(r1)}],{hex(r2)}
+
+# 19f   mov r2,0x21
+
+# 1a1   mov r1,0x0
+
+# 1a3   xor [{hex(r1)}],{hex(r2)}
+
+# 1a4   mov r2,0x21
+
+# 1a6   mov r1,0x0
+
+# 1a8   xor [{hex(r1)}],{hex(r2)}
+
+# 1a9   mov r2,0x21
+
+# 1ab   mov r1,0x0
+
+# 1ad   xor [{hex(r1)}],{hex(r2)}
+
+# 1ae   mov r2,0x21
+
+# 1b0   mov r1,0x0
+
+# 1b2   xor [{hex(r1)}],{hex(r2)}
+
+# 1b3   mov r2,0x21
+
+# 1b5   mov r1,0x0
+
+# 1b7   xor [{hex(r1)}],{hex(r2)}
+
+# 1b8   [10, 50, 51, 52, 53, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] to [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+#其实逆向逻辑也就是如下：
+
+raw=[0x59,0x30,0x75,0x27,0x64,0x5f,0x42,0x65,0x74,0x74,0x65,0x52,0x5f,0x4e,0x30,0x74,0x5f,0x62,0x65,0x5f,0x53,0x30,0x6d,0x65,0x30,0x4e,0x65,0x5f,0x57,0x68,0x6f,0x5f,0x61,0x6c,0x77,0x61,0x79,0x73,0x5f,0x73,0x68,0x30,0x77,0x73,0x5f,0x30,0x66,0x66]
+
+flag=''
+
+for i in range(len(raw)):
+
+    flag+=chr(raw[i]^0x21)
+
+print(flag)
+</code></pre> </div> <div class="prev-next"> <a class="pn-card" href="/posts/block-cipher/"> <small>← 上一篇</small> <strong>Block Cipher</strong> </a> <a class="pn-card" href="/posts/hello/"> <small>下一篇 →</small> <strong>转载&lt;在第一步之前......&gt;</strong> </a> </div> </article> <aside class="sidebar"> <section class="widget toc"> <div class="toc__title">目录 CONTENTS</div> <a href="#这篇文章解决什么问题" data-depth="2" class="is-current"> 这篇文章解决什么问题 </a><a href="#认识虚拟机" data-depth="2"> 认识虚拟机 </a><a href="#最小示例" data-depth="2"> 最小示例 </a><a href="#正向实现" data-depth="2"> 正向实现： </a><a href="#结构体的定义" data-depth="2"> 结构体的定义： </a><a href="#书写机器码" data-depth="2"> 书写机器码： </a><a href="#初始化虚拟机" data-depth="2"> 初始化虚拟机： </a><a href="#解释器编写" data-depth="2"> 解释器编写： </a><a href="#启动" data-depth="2"> 启动： </a><a href="#解题步骤" data-depth="2"> 解题步骤： </a><a href="#1分析vm结构" data-depth="3"> 1.分析VM结构： </a><a href="#2分析指令集" data-depth="3"> 2.分析指令集： </a><a href="#3编写python版解释器输出伪汇编代码" data-depth="3"> 3.编写python版解释器，输出伪汇编代码 </a><a href="#4阅读伪代码分析程序流程写出去虚拟化的原始代码" data-depth="3"> 4.阅读伪代码，分析程序流程，写出去虚拟化的原始代码 </a><a href="#5书写解题脚本" data-depth="3"> 5.书写解题脚本 </a> </section> <section class="widget"> <div class="toc__title">文章信息 META</div> <div class="meta-row"><b>字数</b>11.6k 字</div> <div class="meta-row"><b>阅读</b>约 29 分钟</div> <div class="meta-row"><b>许可</b>CC BY-SA 4.0</div> </section> </aside> </div> <footer class="footer"> <div class="container footer__row"> <span>(C) 2026 逆向手记 · built with Astro</span> <span>CC BY-SA 4.0 · 保持署名，同样分享</span> </div> </footer>  </body></html>
